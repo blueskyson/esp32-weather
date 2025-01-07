@@ -88,7 +88,7 @@ const char* weather_description(int code) {
     }
   }
 
-  return "Unknown Weather Code";
+  return "Unknown";
 }
 
 String json_val(const String& payload, const String& query) {
@@ -153,7 +153,7 @@ void json_array(const String& jsonArrayString, String* outputArray, size_t maxLe
 
   while (endIndex != -1 && count < maxLength) {
     outputArray[count] = trimmedString.substring(startIndex + offset, endIndex - offset);
-    Serial.println(outputArray[count]);
+    // Serial.println(outputArray[count]);
     startIndex = endIndex + 1;
     endIndex = trimmedString.indexOf(',', startIndex);
     count++;

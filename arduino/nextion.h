@@ -36,9 +36,9 @@ static const uint8_t B_UNIT_TEMP = 0x11;
 static const uint8_t B_BACK = 0x01;
 
 struct Command {
-  int event = -1;
-  int page = -1;
-  int component = -1;
+  uint8_t event = 0xff;
+  uint8_t page = 0xff;
+  uint8_t component = 0xff;
   String string_data = "";
 
   String toString() {
@@ -86,16 +86,16 @@ WeatherPic weatherPictures[] = {
 
 void parse(Command& cmd, const String& buffer) {
   int len = buffer.length() - 3;  // Exclude "\xFF\xFF\xFF"
-  cmd.event = (int)buffer[0];
+  cmd.event = (uint8_t)buffer[0];
   switch (cmd.event) {
     case EVENT_TOUCH:
-      cmd.page = (int)buffer[1];
-      cmd.component = (int)buffer[2];
+      cmd.page = (uint8_t)buffer[1];
+      cmd.component = (uint8_t)buffer[2];
       Serial.println(cmd.toString());
       break;
     case CURRENT_PAGE_NUMBER:
-      cmd.page = (int)buffer[1];
-      Serial.println(cmd.toString());
+      cmd.page = (uint8_t)buffer[1];
+      // Serial.println(cmd.toString());
       break;
     case STRING_DATA:
       cmd.string_data = buffer.substring(1, len);

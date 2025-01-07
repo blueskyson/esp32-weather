@@ -5,18 +5,31 @@
 #include "external_api.h"
 #include "nextion.h"
 
+#define SCAN_THRESHOLD_SEC 3
+#define SSID_LIST_LENGTH 5
+
 WiFiMulti wifiMulti;
 IPInfo ip_info;
-uint8_t current_page = PAGE_MAIN;
-String current_time;
+String current_display_time;
+
+// menu states
 String unit_of_temp = "fahrenheit";
+uint8_t current_page = PAGE_MAIN;
+uint8_t current_ssid_page = 0;
+int8_t selected_ssid_row = -1;
+uint8_t last_scan_count = 0;
+time_t last_scan_time = 0;
+
+// Flag for fetching string data after user push buttons
+bool is_password = false;
+bool is_location = false;
 
 void setup() {
-  Serial.begin(115200);                     // UART0
-  Serial2.begin(9600, SERIAL_8N1, 16, 17);  // UART2
+  Serial.begin(115200);                     // UART0 for debug
+  Serial2.begin(9600, SERIAL_8N1, 16, 17);  // UART2 for Nextion display
   WiFi.mode(WIFI_STA);
   wifiMulti.addAP("SpectrumSetup-71", "chillysnake872");
-  while (wifiMulti.run() != WL_CONNECTED) { delay(500); /* Wait for WiFi */ }
+  while (wifiMulti.run() != WL_CONNECTED) { delay(500); }
 
   update_IP_info(ip_info);
   TimeInfo time_info;
@@ -25,7 +38,6 @@ void setup() {
   tv.tv_sec = time_info.unixtime + time_info.raw_offset;
   tv.tv_usec = 0;
   settimeofday(&tv, nullptr);
-  nextion_send("page pageMain\xFF\xFF\xFF");
   nextion_send("sendme\xFF\xFF\xFF");
 }
 
@@ -38,13 +50,13 @@ void loop() {
   }
 
   struct tm timeinfo;
-  if (getLocalTime(&timeinfo)) {
+  if (current_page == PAGE_MAIN && getLocalTime(&timeinfo)) {
     char time_buffer[30];
     strftime(time_buffer, sizeof(time_buffer), "%Y-%m-%d %H:%M:%S", &timeinfo);
-    String new_time = String(time_buffer);
-    if (new_time != current_time) {
-      current_time = new_time;
-      nextion_send("tDatetime.txt=\"" + current_time + "\"\xFF\xFF\xFF", false);
+    String new_display_time = String(time_buffer);
+    if (new_display_time != current_display_time) {
+      current_display_time = new_display_time;
+      nextion_send("tDatetime.txt=\"" + current_display_time + "\"\xFF\xFF\xFF", false);
     }
   }
 
@@ -56,17 +68,119 @@ void processCommand(const Command& cmd) {
     current_page = cmd.page;
     if (cmd.page == PAGE_MAIN) {
       show_main();
+    } else if (cmd.page == PAGE_MENU) {
+      show_menu();
     }
 
     return;
   }
 
-  if (cmd.event == CURRENT_PAGE_NUMBER) {
-    switch (cmd.page) {
-      case PAGE_MAIN:
+  if (cmd.page == PAGE_MAIN) {
+    switch (cmd.component) {
+      case B_REFRESH:
+        nextion_send("page pageMain\xFF\xFF\xFF");  // Erase line chart and reset main page
+        show_main();
         break;
-      case PAGE_MENU:
+      case B_MENU:
+        show_menu();
         break;
+    }
+  } else if (cmd.page == PAGE_MENU) {
+    switch (cmd.component) {
+      case T_ID1:
+      case T_SSID1:
+        select_row(0);
+        break;
+      case T_ID2:
+      case T_SSID2:
+        select_row(1);
+        break;
+      case T_ID3:
+      case T_SSID3:
+        select_row(2);
+        break;
+      case T_ID4:
+      case T_SSID4:
+        select_row(3);
+        break;
+      case T_ID5:
+      case T_SSID5:
+        select_row(4);
+        break;
+      case B_LEFT:
+        show_prev_ssid_page();
+        break;
+      case B_RIGHT:
+        show_next_ssid_page();
+        break;
+      case B_CONNECT:
+        nextion_send("get tPassword.txt\xFF\xFF\xFF");
+        is_password = true;
+        break;
+      case B_BACK:
+        show_main();
+        break;
+    }
+  } else if (cmd.page == 0xff) {
+    if (!cmd.string_data.isEmpty())
+      handle_string_data(cmd.string_data);
+  }
+}
+
+void show_menu() {
+  time_t now = time(nullptr);
+  if (now == -1 || now - last_scan_time >= SCAN_THRESHOLD_SEC) {
+    last_scan_time = now;
+    WiFi.scanDelete();
+    last_scan_count = WiFi.scanNetworks();
+  }
+
+  render_ssids(current_ssid_page * SSID_LIST_LENGTH);
+}
+
+void show_prev_ssid_page() {
+  if (current_ssid_page == 0)
+    return;
+  current_ssid_page -= 1;
+  selected_ssid_row = -1;
+  render_ssids(current_ssid_page * SSID_LIST_LENGTH);
+}
+
+void show_next_ssid_page() {
+  if ((current_ssid_page + 1) * SSID_LIST_LENGTH >= last_scan_count)
+    return;
+  current_ssid_page += 1;
+  selected_ssid_row = -1;
+  render_ssids(current_ssid_page * SSID_LIST_LENGTH);
+}
+
+void select_row(int row) {
+  char buffer[24];
+  if (selected_ssid_row != -1) {
+    snprintf(buffer, sizeof(buffer), "tSSID%d.bco=65535\xFF\xFF\xFF", selected_ssid_row + 1);
+    nextion_send(buffer);
+  }
+
+  snprintf(buffer, sizeof(buffer), "tSSID%d.bco=65504\xFF\xFF\xFF", row + 1);
+  nextion_send(buffer);
+  selected_ssid_row = row;
+}
+
+void render_ssids(int first_index) {
+  char buffer[96];
+  String active_ssid = WiFi.SSID();
+  for (int i = 0; i < SSID_LIST_LENGTH; i++) {
+    snprintf(buffer, sizeof(buffer), "tId%d.txt=\"%02d\"\xFF\xFF\xFF", i + 1, first_index + i + 1);
+    nextion_send(buffer);
+    if (first_index + i < last_scan_count) {
+      snprintf(buffer, sizeof(buffer), "tSSID%d.txt=\"%s\"\xFF\xFF\xFF", i + 1, WiFi.SSID(first_index + i).c_str());
+      nextion_send(buffer);
+      int back_color = !active_ssid.isEmpty() && active_ssid == WiFi.SSID(first_index + i) ? 2032 : 65535;
+      snprintf(buffer, sizeof(buffer), "tSSID%d.bco=%d\xFF\xFF\xFF", i + 1, back_color);
+      nextion_send(buffer);
+    } else {
+      snprintf(buffer, sizeof(buffer), "tSSID%d.txt=\"--\"\xFF\xFF\xFF", i + 1);
+      nextion_send(buffer);
     }
   }
 }
@@ -155,4 +269,39 @@ void render_weather(const int lat, const int lng, const String& timezone) {
     timeinfo.tm_mday += 1;
     mktime(&timeinfo);
   }
+}
+
+void handle_string_data(String data) {
+  if (is_password) {
+    is_password = false;
+    if (selected_ssid_row == -1) {
+      // Serial.println("Failed to connect. No SSID is selected.");
+      return;
+    }
+    connect_to_WiFi(WiFi.SSID(current_ssid_page * 5 + selected_ssid_row).c_str(), data.c_str());
+    show_menu();
+    update_IP_info(ip_info);
+  }
+}
+
+void connect_to_WiFi(const char* ssid, const char* password) {
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFi.disconnect();
+    while (WiFi.status() == WL_CONNECTED) { delay(500); }
+  }
+
+  WiFi.begin(ssid, password);
+  // Serial.printf("Connecting to WiFi: %s, Password: %s\n", ssid, password);
+  for (int i = 0; i < 10; i++) {
+    if (WiFi.status() == WL_CONNECTED) {
+      wifiMulti.addAP(ssid, password);
+      return;
+    }
+    delay(500);
+  }
+
+  // Serial.println("Connection Timeout");
+  WiFi.disconnect();
+  WiFi.mode(WIFI_OFF);
+  delay(500);
 }
