@@ -3,8 +3,43 @@
 
 #include <Arduino.h>
 #include <HTTPClient.h>
+#include "utils.h"
 
 #define DAY_COUNT 5
+
+// Certificate of nominatim.openmaps.org until Mar 12 23:59:59 2027 GMT
+// Check out using command: openssl s_client -showcerts -connect jigsaw.w3.org:443
+const char *rootCACertificate = R"string_literal(
+-----BEGIN CERTIFICATE-----
+MIIFBjCCAu6gAwIBAgIRAIp9PhPWLzDvI4a9KQdrNPgwDQYJKoZIhvcNAQELBQAw
+TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh
+cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMjQwMzEzMDAwMDAw
+WhcNMjcwMzEyMjM1OTU5WjAzMQswCQYDVQQGEwJVUzEWMBQGA1UEChMNTGV0J3Mg
+RW5jcnlwdDEMMAoGA1UEAxMDUjExMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIB
+CgKCAQEAuoe8XBsAOcvKCs3UZxD5ATylTqVhyybKUvsVAbe5KPUoHu0nsyQYOWcJ
+DAjs4DqwO3cOvfPlOVRBDE6uQdaZdN5R2+97/1i9qLcT9t4x1fJyyXJqC4N0lZxG
+AGQUmfOx2SLZzaiSqhwmej/+71gFewiVgdtxD4774zEJuwm+UE1fj5F2PVqdnoPy
+6cRms+EGZkNIGIBloDcYmpuEMpexsr3E+BUAnSeI++JjF5ZsmydnS8TbKF5pwnnw
+SVzgJFDhxLyhBax7QG0AtMJBP6dYuC/FXJuluwme8f7rsIU5/agK70XEeOtlKsLP
+Xzze41xNG/cLJyuqC0J3U095ah2H2QIDAQABo4H4MIH1MA4GA1UdDwEB/wQEAwIB
+hjAdBgNVHSUEFjAUBggrBgEFBQcDAgYIKwYBBQUHAwEwEgYDVR0TAQH/BAgwBgEB
+/wIBADAdBgNVHQ4EFgQUxc9GpOr0w8B6bJXELbBeki8m47kwHwYDVR0jBBgwFoAU
+ebRZ5nu25eQBc4AIiMgaWPbpm24wMgYIKwYBBQUHAQEEJjAkMCIGCCsGAQUFBzAC
+hhZodHRwOi8veDEuaS5sZW5jci5vcmcvMBMGA1UdIAQMMAowCAYGZ4EMAQIBMCcG
+A1UdHwQgMB4wHKAaoBiGFmh0dHA6Ly94MS5jLmxlbmNyLm9yZy8wDQYJKoZIhvcN
+AQELBQADggIBAE7iiV0KAxyQOND1H/lxXPjDj7I3iHpvsCUf7b632IYGjukJhM1y
+v4Hz/MrPU0jtvfZpQtSlET41yBOykh0FX+ou1Nj4ScOt9ZmWnO8m2OG0JAtIIE38
+01S0qcYhyOE2G/93ZCkXufBL713qzXnQv5C/viOykNpKqUgxdKlEC+Hi9i2DcaR1
+e9KUwQUZRhy5j/PEdEglKg3l9dtD4tuTm7kZtB8v32oOjzHTYw+7KdzdZiw/sBtn
+UfhBPORNuay4pJxmY/WrhSMdzFO2q3Gu3MUBcdo27goYKjL9CTF8j/Zz55yctUoV
+aneCWs/ajUX+HypkBTA+c8LGDLnWO2NKq0YD/pnARkAnYGPfUDoHR9gVSp/qRx+Z
+WghiDLZsMwhN1zjtSC0uBWiugF3vTNzYIEFfaPG7Ws3jDrAMMYebQ95JQ+HIBD/R
+PBuHRTBpqKlyDnkSHDHYPiNX3adPoPAcgdF3H2/W0rmoswMWgTlLn1Wu0mrks7/q
+pdWfS6PJ1jty80r2VKsM/Dj3YIDfbjXKdaFU5C+8bhfJGqU3taKauuz0wHVGT3eo
+6FlWkWYtbt4pgdamlwVeZEW+LM7qZEJEsMNPrfC03APKmZsJgpWCDWOKZvkZcvjV
+uYkQ4omYCTX5ohy+knMjdOmdH9c7SpqEWBDC86fiNex+O0XOMEZSa8DA
+-----END CERTIFICATE-----
+)string_literal";
 
 struct WeatherDescription {
   short code;
@@ -62,7 +97,6 @@ struct Geocode {
   String city;
   String country_code;
   String country;
-  String display_name;
 };
 
 struct TimeInfo {
@@ -91,75 +125,6 @@ const char* weather_description(int code) {
   return "Unknown";
 }
 
-String json_val(const String& payload, const String& query) {
-  String remainingQuery = query;
-  String currentPayload = payload;
-
-  while (remainingQuery.length() > 0) {
-    int dotIndex = remainingQuery.indexOf('.');
-    String key = (dotIndex == -1) ? remainingQuery : remainingQuery.substring(0, dotIndex);
-    remainingQuery = (dotIndex == -1) ? "" : remainingQuery.substring(dotIndex + 1);
-
-    int keyIndex = currentPayload.indexOf("\"" + key + "\":");
-    if (keyIndex == -1) return "";  // Key not found
-
-    int valueStart = currentPayload.indexOf(':', keyIndex) + 1;
-    while (currentPayload[valueStart] == ' ') {
-      valueStart++;
-    }
-    int valueEnd;
-
-    // Check if the value is a string
-    if (currentPayload[valueStart] == '"') {
-      valueStart++;
-      valueEnd = currentPayload.indexOf('"', valueStart);
-    } else {
-      // Handle numbers, arrays, or objects
-      if (currentPayload[valueStart] == '[' || currentPayload[valueStart] == '{') {
-        char closingChar = (currentPayload[valueStart] == '[') ? ']' : '}';
-        valueEnd = currentPayload.indexOf(closingChar, valueStart) + 1;
-      } else {
-        valueEnd = currentPayload.indexOf(',', valueStart);
-        if (valueEnd == -1) valueEnd = currentPayload.indexOf('}', valueStart);  // End of JSON
-      }
-    }
-
-    String extractedValue = currentPayload.substring(valueStart, valueEnd);
-    extractedValue.trim();
-
-    // If there are more nested keys, update the current payload to extracted object/array
-    if (remainingQuery.length() > 0 && (extractedValue.startsWith("{") || extractedValue.startsWith("["))) {
-      currentPayload = extractedValue;
-    } else {
-      // Serial.println(extractedValue);
-      return extractedValue;  // Return final value
-    }
-  }
-
-  return "";
-}
-
-void json_array(const String& jsonArrayString, String* outputArray, size_t maxLength) {
-  // Remove brackets from the JSON array string
-  String trimmedString = jsonArrayString;
-  trimmedString.replace("[", "");
-  trimmedString.replace("]", ",");
-
-  // Split the string by commas
-  int startIndex = 0;
-  int endIndex = trimmedString.indexOf(',');
-  int offset = trimmedString[startIndex] == '"' ? 1 : 0;
-  int count = 0;
-
-  while (endIndex != -1 && count < maxLength) {
-    outputArray[count] = trimmedString.substring(startIndex + offset, endIndex - offset);
-    // Serial.println(outputArray[count]);
-    startIndex = endIndex + 1;
-    endIndex = trimmedString.indexOf(',', startIndex);
-    count++;
-  }
-}
-
 void update_IP_info(IPInfo& info) {
   HTTPClient http;
   http.begin("http://ipinfo.io/json");
@@ -176,7 +141,7 @@ void update_IP_info(IPInfo& info) {
     info.lat = loc.substring(0, commaIndex).toFloat();
     info.lng = loc.substring(commaIndex + 1).toFloat();
   } else {
-    // Serial.printf("Error fetching weather: %d\n", httpCode);
+    // Serial.printf("Error fetching ip info: %d\n", httpCode);
     info.city = "";
   }
 
@@ -194,11 +159,44 @@ void update_time_info(TimeInfo& info, const String& timezone) {
     info.day_of_week = json_val(payload, "day_of_week").toInt();
     info.raw_offset = json_val(payload, "raw_offset").toInt();
   } else {
-    // Serial.printf("Error fetching weather: %d\n", httpCode);
+    // Serial.printf("Error fetching time: %d\n", httpCode);
     info.unixtime = 0;
   }
 
   http.end();
+}
+
+void update_geocode(Geocode& g, const String& address) {
+  NetworkClientSecure* client = new NetworkClientSecure;
+  if (!client)
+    return;
+  client->setCACert(rootCACertificate);
+  String url = "https://nominatim.openstreetmap.org/search?q=" + urlEncode(address) + "&format=json&addressdetails=1";
+
+  {
+    // Add a scope for HTTPClient to make sure it is destroyed before NetworkClientSecure
+    HTTPClient https;
+    https.begin(*client, url);
+    https.addHeader("User-Agent", "ESP32/1.0 (clin4185@usc.edu)");
+    int httpCode = https.GET();
+    if (httpCode == HTTP_CODE_OK) {
+      String payload = https.getString();
+      // Serial.println(payload);
+      g.lat = json_val(payload, "lat").toFloat();
+      g.lng = json_val(payload, "lon").toFloat();
+      g.city = json_val(payload, "address.city");
+      g.country_code = json_val(payload, "address.country_code");
+      g.country_code.toUpperCase();
+      g.country = json_val(payload, "address.country");
+    } else {
+      // Serial.printf("Error fetching geocode: %d\n", httpCode);
+      g.city = "";
+      g.country_code = "";
+      g.country = "";
+    }
+  }
+
+  delete client;
 }
 
 void update_weather(WeatherData& w, const float& lat, const float& lng, const String& timezone = "auto", const String& tempUnit = "celsius") {

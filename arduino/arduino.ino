@@ -10,6 +10,7 @@
 
 WiFiMulti wifiMulti;
 IPInfo ip_info;
+Geocode geocode;
 String current_display_time;
 
 // menu states
@@ -27,17 +28,12 @@ bool is_location = false;
 void setup() {
   Serial.begin(115200);                     // UART0 for debug
   Serial2.begin(9600, SERIAL_8N1, 16, 17);  // UART2 for Nextion display
+  while (!Serial || !Serial2) { delay(200); }
   WiFi.mode(WIFI_STA);
-  wifiMulti.addAP("SpectrumSetup-71", "chillysnake872");
-  while (wifiMulti.run() != WL_CONNECTED) { delay(500); }
 
-  update_IP_info(ip_info);
-  TimeInfo time_info;
-  update_time_info(time_info, ip_info.timezone);
-  struct timeval tv;
-  tv.tv_sec = time_info.unixtime + time_info.raw_offset;
-  tv.tv_usec = 0;
-  settimeofday(&tv, nullptr);
+  // Optionally set initial WiFi.
+  // wifiMulti.addAP("SSID", "PASSWORD");
+  // while (wifiMulti.run() != WL_CONNECTED) { delay(500); }
   nextion_send("sendme\xFF\xFF\xFF");
 }
 
@@ -49,14 +45,24 @@ void loop() {
     processCommand(cmds[i]);
   }
 
-  struct tm timeinfo;
-  if (current_page == PAGE_MAIN && getLocalTime(&timeinfo)) {
-    char time_buffer[30];
-    strftime(time_buffer, sizeof(time_buffer), "%Y-%m-%d %H:%M:%S", &timeinfo);
-    String new_display_time = String(time_buffer);
-    if (new_display_time != current_display_time) {
-      current_display_time = new_display_time;
-      nextion_send("tDatetime.txt=\"" + current_display_time + "\"\xFF\xFF\xFF", false);
+  if (current_page == PAGE_MAIN) {
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo)) {
+      char time_buffer[30];
+      strftime(time_buffer, sizeof(time_buffer), "%Y-%m-%d %H:%M:%S", &timeinfo);
+      String new_display_time = String(time_buffer);
+      if (new_display_time != current_display_time) {
+        current_display_time = new_display_time;
+        nextion_send("tDatetime.txt=\"" + current_display_time + "\"\xFF\xFF\xFF", false);
+      }
+    } else if (WiFi.status() == WL_CONNECTED) {
+      update_IP_info(ip_info);
+      TimeInfo time_info;
+      update_time_info(time_info, ip_info.timezone);
+      struct timeval tv;
+      tv.tv_sec = time_info.unixtime + time_info.raw_offset;
+      tv.tv_usec = 0;
+      settimeofday(&tv, nullptr);
     }
   }
 
@@ -116,6 +122,18 @@ void processCommand(const Command& cmd) {
       case B_CONNECT:
         nextion_send("get tPassword.txt\xFF\xFF\xFF");
         is_password = true;
+        break;
+      case B_UPDATE_LOCATION:
+        nextion_send("get tLocation.txt\xFF\xFF\xFF");
+        is_location = true;
+        break;
+      case B_UNIT_TEMP:
+        if (unit_of_temp == "fahrenheit") {
+          unit_of_temp = "celsius";
+        } else {
+          unit_of_temp = "fahrenheit";
+        }
+        nextion_send("bUnitTemp.txt=\"Unit of Temperature: " + unit_of_temp + "\"\xFF\xFF\xFF");
         break;
       case B_BACK:
         show_main();
@@ -186,10 +204,22 @@ void render_ssids(int first_index) {
 }
 
 void show_main() {
-  if (ip_info.city != "") {
-    nextion_send("tAddress.txt=\"" + ip_info.city + ", " + ip_info.region + ", " + ip_info.country + "\"\xFF\xFF\xFF");
-    render_weather(ip_info.lat, ip_info.lng, ip_info.timezone);
+  current_ssid_page = 0;
+  selected_ssid_row = -1;
+
+  if (!geocode.city.isEmpty()) {
+    nextion_send(String("tAddress.txt=\"") + geocode.city + ", " + geocode.country_code + "\"\xFF\xFF\xFF");
+    render_weather(geocode.lat, geocode.lng, ip_info.timezone);
+    return;
   }
+
+  if (!ip_info.city.isEmpty()) {
+    nextion_send(String("tAddress.txt=\"") + ip_info.city + ", " + ip_info.region + ", " + ip_info.country + "\"\xFF\xFF\xFF");
+    render_weather(ip_info.lat, ip_info.lng, ip_info.timezone);
+    return;
+  }
+
+  nextion_send("tAddress.txt=\"NO WI-FI\"\xFF\xFF\xFF");
 }
 
 void render_weather(const int lat, const int lng, const String& timezone) {
@@ -281,6 +311,9 @@ void handle_string_data(String data) {
     connect_to_WiFi(WiFi.SSID(current_ssid_page * 5 + selected_ssid_row).c_str(), data.c_str());
     show_menu();
     update_IP_info(ip_info);
+  } else if (is_location) {
+    is_location = false;
+    update_geocode(geocode, data);
   }
 }
 
@@ -300,7 +333,9 @@ void connect_to_WiFi(const char* ssid, const char* password) {
     delay(500);
   }
 
-  // Serial.println("Connection Timeout");
+  // WiFi.scanNetworks doesn't work after failing to connect a WiFi.
+  // So turn off WiFi here as a workaround.
+  // See https://github.com/espressif/arduino-esp32/issues/3294
   WiFi.disconnect();
   WiFi.mode(WIFI_OFF);
   delay(500);

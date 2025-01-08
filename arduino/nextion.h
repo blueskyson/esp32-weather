@@ -91,7 +91,7 @@ void parse(Command& cmd, const String& buffer) {
     case EVENT_TOUCH:
       cmd.page = (uint8_t)buffer[1];
       cmd.component = (uint8_t)buffer[2];
-      Serial.println(cmd.toString());
+      // Serial.println(cmd.toString());
       break;
     case CURRENT_PAGE_NUMBER:
       cmd.page = (uint8_t)buffer[1];
@@ -99,7 +99,7 @@ void parse(Command& cmd, const String& buffer) {
       break;
     case STRING_DATA:
       cmd.string_data = buffer.substring(1, len);
-      Serial.println(cmd.string_data);
+      // Serial.println(cmd.string_data);
       break;
   }
 }
